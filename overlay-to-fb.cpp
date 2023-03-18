@@ -91,6 +91,10 @@ static unsigned char* outputFrameScaledB = new unsigned char[scaledOutWidth * sc
 
 Image overlayImage;
 
+string overlayFilename = "./pen15.png";
+std::vector<unsigned char> merged_data(startingWidth * startingHeight * 3);
+constexpr int num_threads = 4;
+
 static void errno_exit(const char *s) {
         fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
         exit(EXIT_FAILURE);
@@ -260,33 +264,82 @@ void writeFrameToFramebuffer(const unsigned char* frameData) {
     close(fbfd);
 }
 
-string overlayFilename = "/root/pen15.png";
-std::vector<unsigned char> overlayData(startingWidth * startingHeight * 4);
-std::vector<unsigned char> merged_data(startingWidth * startingHeight * 3);
-constexpr int num_threads = 4;
+/*void overlayRGBA32OnRGB24(unsigned char* rgb24, const unsigned char* rgba32, int width, int height) {
+    const int numPixels = width * height;
+    const int numBytesRGB24 = numPixels * 3;
+    const int numBytesRGBA32 = numPixels * 4;
+    for (int i = 0; i < numPixels; ++i) {
+        const int r1 = rgb24[i * 3];
+        const int g1 = rgb24[i * 3 + 1];
+        const int b1 = rgb24[i * 3 + 2];
+        const int r2 = rgba32[i * 4];
+        const int g2 = rgba32[i * 4 + 1];
+        const int b2 = rgba32[i * 4 + 2];
+        const int alpha = rgba32[i * 4 + 3];
+        if (alpha > 0) {
+            const float alpha_ratio = alpha / 255.0f;
+            const int r = static_cast<int>(r1 * (1 - alpha_ratio) + r2 * alpha_ratio);
+            const int g = static_cast<int>(g1 * (1 - alpha_ratio) + g2 * alpha_ratio);
+            const int b = static_cast<int>(b1 * (1 - alpha_ratio) + b2 * alpha_ratio);
+            rgb24[i * 3] = static_cast<unsigned char>(r);
+            rgb24[i * 3 + 1] = static_cast<unsigned char>(g);
+            rgb24[i * 3 + 2] = static_cast<unsigned char>(b);
+        }
+    }
+}*/
+
+void overlayRGBA32OnRGB24(unsigned char* rgb24, const unsigned char* rgba32, int width, int height, int numThreads = std::thread::hardware_concurrency()) {
+    const int numPixels = width * height;
+    const int numBytesRGB24 = numPixels * 3;
+    const int numBytesRGBA32 = numPixels * 4;
+    std::vector<std::thread> threads(numThreads);
+    for (int t = 0; t < numThreads; ++t) {
+        const int start = (t * numPixels) / numThreads;
+        const int end = ((t + 1) * numPixels) / numThreads;
+        threads[t] = std::thread([=] {
+            for (int i = start; i < end; ++i) {
+                const int r1 = rgb24[i * 3];
+                const int g1 = rgb24[i * 3 + 1];
+                const int b1 = rgb24[i * 3 + 2];
+                const int r2 = rgba32[i * 4];
+                const int g2 = rgba32[i * 4 + 1];
+                const int b2 = rgba32[i * 4 + 2];
+                const int alpha = rgba32[i * 4 + 3];
+                if (alpha > 0) {
+                    const float alpha_ratio = alpha / 255.0f;
+                    const int r = static_cast<int>(r1 * (1 - alpha_ratio) + r2 * alpha_ratio);
+                    const int g = static_cast<int>(g1 * (1 - alpha_ratio) + g2 * alpha_ratio);
+                    const int b = static_cast<int>(b1 * (1 - alpha_ratio) + b2 * alpha_ratio);
+                    rgb24[i * 3] = static_cast<unsigned char>(r);
+                    rgb24[i * 3 + 1] = static_cast<unsigned char>(g);
+                    rgb24[i * 3 + 2] = static_cast<unsigned char>(b);
+                }
+            }
+        });
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+}
+
+void convertRGBtoBGR(unsigned char* rgb24Data, unsigned char* bgr24Data, int width, int height) {
+    int numPixels = width * height;
+    int rgbIndex = 0;
+    int bgrIndex = 0;
+    for (int i = 0; i < numPixels; i++) {
+        bgr24Data[bgrIndex++] = rgb24Data[rgbIndex + 2];  // B value
+        bgr24Data[bgrIndex++] = rgb24Data[rgbIndex + 1];  // G value
+        bgr24Data[bgrIndex++] = rgb24Data[rgbIndex];      // R value
+        rgbIndex += 3;
+    }
+}
 
 static void process_image(const void *p, int size) {
   unsigned char* preP = (unsigned char*)p;
-  //frame_number++;
   std::memcpy(merged_data.data(), preP, 1280 * 720 * 3);
-  overlayRGB24Frames(merged_data.data(), &overlayImage.data[0], startingWidth, startingHeight, num_threads);
-  //overlayRGB24Frames(merged_data.data(), overlayData.data(), startingWidth, startingHeight, num_threads);
+  overlayRGBA32OnRGB24(merged_data.data(), overlayImage.data.data(), startingWidth, startingHeight, num_threads);
+  //convertRGBtoBGR(merged_data.data(), merged_data.data(), startingWidth, startingHeight);
   writeFrameToFramebuffer(merged_data.data());
-  //fwrite(merged_data.data(), (1280 * 720 * 3), 1, stdout);
-  //write(1, p, size);
-  //rgb24_to_greyscale(preP, outputFrameGreyscale, startingWidth, startingHeight);
-  //yuyv_to_greyscale(preP, outputFrameGreyscale, startingWidth, startingHeight);
-  //frame_to_stdout(outputFrameGreyscale, startingWidth * startingHeight * 3);
-  /*unsigned int wX, hY;
-  const byte (*pixel) = (byte (*)) p;
-  for(wX = 0; wX < w; ++wX) {
-    for(hY = 0; hY < h; ++hY, pixel += 3) {
-      red = pixel[0], green = pixel[1], blue = pixel[2];
-      fwrite(&red, 1, 1, fp);
-      fwrite(&green, 1, 1, fp);
-      fwrite(&blue, 1, 1, fp);
-    }
-  }*/
 }
 
 static int read_frame(void) {
@@ -732,63 +785,9 @@ static const struct option
 
 int main(int argc, char **argv) {
         overlayImage = read_png_file(overlayFilename.c_str());
-        readPNG(overlayFilename, overlayData.data(), startingWidth, startingHeight);
+        //readPNG(overlayFilename, overlayData.data(), startingWidth, startingHeight);
         dev_name = (char*)calloc(64, sizeof(char));
         strcpy(dev_name, "/dev/video0");
-        /*fb0 = open("/dev/fb0", O_WRONLY);
-        if (fb0 == -1) {
-          perror("Error opening /dev/fb0");
-          return 1;
-        }
-
-        // Set the framebuffer format to RGB565 little-endian
-        struct fb_var_screeninfo var_info;
-        if (ioctl(fb0, FBIOGET_VSCREENINFO, &var_info) == -1) {
-          perror("Error getting var_info from /dev/fb0");
-          close(fb0);
-          return 1;
-        }
-        var_info.grayscale = 0;
-        var_info.bits_per_pixel = 16;
-        var_info.red.offset = 11;
-        var_info.red.length = 5;
-        var_info.green.offset = 5;
-        var_info.green.length = 6;
-        var_info.blue.offset = 0;
-        var_info.blue.length = 5;
-        var_info.transp.offset = 0;
-        var_info.transp.length = 0;
-        var_info.nonstd = 0;
-        var_info.activate |= FB_ACTIVATE_NOW | FB_ACTIVATE_ALL;
-        if (ioctl(fb0, FBIOPUT_VSCREENINFO, &var_info) == -1) {
-          perror("Error setting var_info on /dev/fb0");
-          close(fb0);
-          return 1;
-        }
-        // Set the framebuffer size and offset to write the full screen
-        struct fb_fix_screeninfo fix_info;
-        if (ioctl(fb0, FBIOGET_FSCREENINFO, &fix_info) == -1) {
-          perror("Error getting fix_info from /dev/fb0");
-          close(fb0);
-          return 1;
-        }
-        screen_size = fix_info.line_length * var_info.yres;
-        if (screen_size < startingWidth * startingHeight * 2) {
-          perror("Framebuffer too small to write full screen");
-          close(fb0);
-          return 1;
-        }
-        struct fb_var_screeninfo var_info2 = var_info;
-        var_info2.xres = startingWidth;
-        var_info2.yres = startingHeight;
-        var_info2.xres_virtual = startingWidth;
-        var_info2.yres_virtual = startingHeight * 2;
-        var_info2.yoffset = 0;
-        if (ioctl(fb0, FBIOPUT_VSCREENINFO, &var_info2) == -1) {
-          perror("Error setting var_info2 on /dev/fb0");
-          close(fb0);
-          return 1;
-        }*/
         for (;;) {
                 int idx;
                 int c;
@@ -844,7 +843,6 @@ int main(int argc, char **argv) {
         stop_capturing();
         uninit_device();
         close_device();
-        //fflush(fp);
         fprintf(stderr, "\n");
         return 0;
 }
